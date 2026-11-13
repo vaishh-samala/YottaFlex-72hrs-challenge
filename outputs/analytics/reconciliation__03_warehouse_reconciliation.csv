@@ -1,0 +1,2 @@
+fact_rows,distinct_order_lines,sum_facts_inserted,sum_total_amount,sum_qty_x_price,orphan_products,orphan_customers,orphan_dates,all_checks_pass
+732,732,732,348076.76,348076.76,0,0,0,True

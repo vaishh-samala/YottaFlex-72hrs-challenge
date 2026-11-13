@@ -1,0 +1,69 @@
+{
+  "environment": {
+    "python": "3.14.3",
+    "duckdb": "2.0.0",
+    "pandas": "3.1.1",
+    "platform": "macOS-26.6.2-arm64-arm-64bit-Mach-O",
+    "cpu": "Apple M1",
+    "cpu_count": 8,
+    "run_at_utc": "2026-11-12 18:47:20",
+    "load_avg_1m_start": 4.01,
+    "repeats": 5,
+    "seed": 42,
+    "load_avg_1m_end": 4.45
+  },
+  "pipeline": [
+    {
+      "order_rows": 1004,
+      "product_rows": 208,
+      "input_rows": 1212,
+      "valid_rows": 1165,
+      "rejected_rows": 47,
+      "warehouse_rows_written": 965,
+      "ingestion_seconds": 0.011,
+      "validation_seconds": 0.022,
+      "transformation_seconds": 0.015,
+      "load_seconds": 0.044,
+      "generation_seconds": 0.033,
+      "total_seconds": 0.118,
+      "forced_rerun_seconds": 0.113,
+      "repeats": 5,
+      "total_min": 0.112,
+      "total_max": 0.367,
+      "rows_per_second": 10271,
+      "forced_rerun_facts_inserted": 0,
+      "facts_unchanged_after_rerun": true,
+      "requested_order_lines": 1000,
+      "products_requested": 200
+    },
+    {
+      "order_rows": 100400,
+      "product_rows": 2080,
+      "input_rows": 102480,
+      "valid_rows": 98630,
+      "rejected_rows": 3850,
+      "warehouse_rows_written": 96630,
+      "ingestion_seconds": 0.458,
+      "validation_seconds": 0.629,
+      "transformation_seconds": 0.459,
+      "load_seconds": 0.367,
+      "generation_seconds": 0.833,
+      "total_seconds": 2.056,
+      "forced_rerun_seconds": 2.303,
+      "repeats": 5,
+      "total_min": 2.003,
+      "total_max": 2.74,
+      "rows_per_second": 49844,
+      "forced_rerun_facts_inserted": 0,
+      "facts_unchanged_after_rerun": true,
+      "requested_order_lines": 100000,
+      "products_requested": 2000
+    }
+  ],
+  "optimisation_load_strategy": {
+    "rows": 20000,
+    "row_by_row_seconds": 3.965,
+    "set_based_seconds": 0.0045,
+    "speedup_x": 886.1
+  }
+}

@@ -1,0 +1,9 @@
+product_id,product_name,category,brand,list_price,product_status,updated_at,source_file
+P00001,DarkOliveGreen Monitor,Electronics,Figueroa and Sons,733.4,discontinued,2026-07-01T00:00:00Z,products_update.csv
+P00006,Indigo Webcam,Electronics,Lawrence-Pacheco,1048.32,active,2026-07-01T00:00:00Z,products_update.csv
+P00037,White Kettle,Home & Kitchen,Anderson Group,104.8,active,2026-07-01T00:00:00Z,products_update.csv
+P00046,Sienna Perfume,Beauty,Mueller Group,128.1,active,2026-07-01T00:00:00Z,products_update.csv
+P00014,Olive RC Car,Toys,Chavez-Flowers,68.13,active,2026-07-01T00:00:00Z,products_update.csv
+P00055,FireBrick Jacket,Clothing,Tucker-Lewis,258.18,active,2026-07-01T00:00:00Z,products_update.csv
+P00061,BurlyWood Jeans,Clothing,Woods Calhoun and Schmidt,17.72,active,2026-07-01T17:42:00Z,products_update.csv
+P95000,,Grocery,Acme,9.99,active,2026-01-01T00:00:00Z,products_update.csv

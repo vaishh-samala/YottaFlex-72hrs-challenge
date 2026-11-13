@@ -1,0 +1,33 @@
+# Generated warehouse & pipeline outputs (recreate with the commands in README)
+data/warehouse.duckdb
+data/warehouse.duckdb.wal
+data/raw/*
+data/processed/*
+data/quarantine/*
+data/generated/
+data/benchmark/
+# labels of generated datasets (sample labels are kept)
+data/labels/*
+!data/labels/sample/
+logs/*
+!data/raw/.gitkeep
+!data/processed/.gitkeep
+!data/quarantine/.gitkeep
+!logs/.gitkeep
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+*.egg-info/
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+
+# Secrets / local config (none are required by this project)
+.env
+.streamlit/secrets.toml

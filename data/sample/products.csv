@@ -1,0 +1,66 @@
+product_id,product_name,category,brand,list_price,product_status,updated_at,source_file
+P00001,DarkOliveGreen Monitor,Electronics,Figueroa and Sons,666.73,active,2025-12-01T02:03:00Z,products.csv
+P00002,Ivory Face Serum,Beauty,Doyle Ltd,146.47,active,2025-12-01T02:15:00Z,products.csv
+P00003,YellowGreen Lipstick,Beauty,Garza Inc,23.58,active,2025-12-01T12:00:00Z,products.csv
+P00004,Black Novel,Books,Robinson PLC,53.29,active,2025-12-01T22:14:00Z,products.csv
+P00005,Bisque Football,Sports,Gonzalez Santos and Gardner,98.62,active,2025-12-01T21:18:00Z,products.csv
+P00006,Indigo Webcam,Electronics,Lawrence-Pacheco,953.02,active,2025-12-01T19:51:00Z,products.csv
+P00007,AntiqueWhite Shampoo,Beauty,Wolfe LLC,145.75,active,2025-12-01T16:16:00Z,products.csv
+P00008,LightSeaGreen RC Car,Toys,Lewis LLC,96.54,discontinued,2025-12-01T04:40:00Z,products.csv
+P00009,DarkKhaki Yoga Mat,Sports,James LLC,276.39,active,2025-12-01T08:47:00Z,products.csv
+P00010,MediumTurquoise Green Tea,Grocery,Baker Williams and Stevens,23.49,active,2025-12-01T07:49:00Z,products.csv
+P00011,DarkRed Puzzle,Toys,Miller-Carter,31.2,active,2025-12-01T07:55:00Z,products.csv
+P00012,MistyRose Lamp,Home & Kitchen,Lee Jones and Stanley,267.92,active,2025-12-01T16:04:00Z,products.csv
+P00013,LightSteelBlue Perfume,Beauty,Wyatt Inc,50.29,active,2025-12-01T10:26:00Z,products.csv
+P00014,Olive RC Car,Toys,Chavez-Flowers,61.94,active,2025-12-01T09:17:00Z,products.csv
+P00015,DodgerBlue Face Serum,Beauty,Kelly-Santiago,33.99,discontinued,2025-12-01T19:07:00Z,products.csv
+P00016,Cornsilk RC Car,Toys,Reid Ferguson and Sanchez,142.8,active,2025-12-01T15:57:00Z,products.csv
+P00017,SandyBrown Football,Sports,Nelson-Schaefer,231.81,active,2025-12-01T05:53:00Z,products.csv
+P00018,Indigo Speaker,Electronics,Nguyen Tate and Brown,714.58,active,2025-12-01T16:02:00Z,products.csv
+P00019,BlanchedAlmond Monitor,Electronics,Morales-Jones,957.56,active,2025-12-01T02:10:00Z,products.csv
+P00020,Maroon Cycling Helmet,Sports,Rios Group,22.02,active,2025-12-01T07:17:00Z,products.csv
+P00021,Salmon Coffee Beans,Grocery,Baker and Sons,25.69,active,2025-12-01T00:49:00Z,products.csv
+P00022,WhiteSmoke Vacuum,Home & Kitchen,Burgess-Patterson,176.02,active,2025-12-01T01:23:00Z,products.csv
+P00023,PaleGoldenRod Jeans,Clothing,Robinson-Bright,142.8,active,2025-12-01T23:54:00Z,products.csv
+P00024,Teal Shampoo,Beauty,Davis-Williams,123.03,active,2025-12-01T09:45:00Z,products.csv
+P00025,DarkOliveGreen Novel,Books,Burton Ltd,11.75,active,2025-12-01T16:43:00Z,products.csv
+P00026,Peru Jeans,Clothing,Brown James and Ferrell,129.25,active,2025-12-01T03:52:00Z,products.csv
+P00027,Wheat Jeans,Clothing,Maddox-Valencia,115.97,active,2025-12-01T05:43:00Z,products.csv
+P00028,Aqua Textbook,Books,Le Maldonado and Herrera,32.14,active,2025-12-01T15:07:00Z,products.csv
+P00029,LightGreen Novel,Books,Peterson Carter and Moore,77.14,active,2025-12-01T11:52:00Z,products.csv
+P00030,AliceBlue Shampoo,Beauty,Liu Baker and Mason,145.53,active,2025-12-01T06:22:00Z,products.csv
+P00031,Fuchsia Textbook,Books,Gaines Harrell and Evans,38.7,active,2025-12-01T01:54:00Z,products.csv
+P00032,Tan Speaker,Electronics,Gonzalez Brooks and Martin,691.83,active,2025-12-01T21:39:00Z,products.csv
+P00033,Wheat Shampoo,Beauty,George Group,88.99,active,2025-12-01T11:07:00Z,products.csv
+P00034,Azure Puzzle,Toys,Hickman LLC,145.58,active,2025-12-01T18:12:00Z,products.csv
+P00035,LawnGreen Textbook,Books,Allen PLC,48.81,active,2025-12-01T15:05:00Z,products.csv
+P00036,Cyan Monitor,Electronics,Dennis Inc,76.8,active,2025-12-01T09:58:00Z,products.csv
+P00037,White Kettle,Home & Kitchen,Anderson Group,95.27,active,2025-12-01T04:12:00Z,products.csv
+P00038,FireBrick Cycling Helmet,Sports,Rose-Obrien,370.8,active,2025-12-01T04:05:00Z,products.csv
+P00039,HotPink Jacket,Clothing,Campos Vaughn and Marquez,151.0,discontinued,2025-12-01T03:38:00Z,products.csv
+P00040,PaleGoldenRod Green Tea,Grocery,Santos Kim and Holmes,47.4,active,2025-12-01T11:34:00Z,products.csv
+P00041,DarkOrchid Biography,Books,Walker LLC,41.8,active,2025-12-01T03:51:00Z,products.csv
+P00042,Beige Football,Sports,Spencer Chapman and Smith,114.12,active,2025-12-01T11:21:00Z,products.csv
+P00043,Chocolate Football,Sports,Jones Inc,181.18,discontinued,2025-12-01T08:43:00Z,products.csv
+P00044,MediumPurple Puzzle,Toys,Palmer LLC,33.21,active,2025-12-01T21:30:00Z,products.csv
+P00045,SlateBlue Novel,Books,Ryan Ltd,55.42,active,2025-12-01T05:51:00Z,products.csv
+P00046,Sienna Perfume,Beauty,Mueller Group,116.45,active,2025-12-01T17:26:00Z,products.csv
+P00047,Gold Tennis Racket,Sports,Davis Group,99.78,discontinued,2025-12-01T03:23:00Z,products.csv
+P00048,MidnightBlue Football,Sports,Jenkins-Shields,333.62,active,2025-12-01T08:54:00Z,products.csv
+P00049,CadetBlue Green Tea,Grocery,Valdez Lucas and Brown,57.27,active,2025-12-01T14:55:00Z,products.csv
+P00050,MediumSlateBlue Tennis Racket,Sports,Wright and Sons,375.06,active,2025-12-01T06:08:00Z,products.csv
+P00051,WhiteSmoke Yoga Mat,Sports,Taylor-White,179.69,active,2025-12-01T03:38:00Z,products.csv
+P00052,SandyBrown Coffee Beans,Grocery,Baxter Inc,53.67,active,2025-12-01T17:57:00Z,products.csv
+P00053,Red Speaker,Electronics,Garcia Pearson and Fernandez,484.15,active,2025-12-01T08:03:00Z,products.csv
+P00054,Aquamarine Shampoo,Beauty,House and Sons,18.7,active,2025-12-01T08:58:00Z,products.csv
+P00055,FireBrick Jacket,Clothing,Tucker-Lewis,234.71,active,2025-12-01T00:45:00Z,products.csv
+P00056,PaleGoldenRod Headphones,Electronics,Martin Inc,242.63,active,2025-12-01T19:56:00Z,products.csv
+P00057,Orange Biography,Books,House-Glover,70.59,active,2025-12-01T06:43:00Z,products.csv
+P00058,LightSlateGray Comic,Books,Horton-Cross,77.89,active,2025-12-01T18:39:00Z,products.csv
+P00059,SlateBlue T-Shirt,Clothing,Lee and Sons,11.37,active,2025-12-01T06:42:00Z,products.csv
+P00060,Chartreuse Blender,Home & Kitchen,Fitzgerald Brown and Edwards,81.88,active,2025-12-01T16:15:00Z,products.csv
+P90000,,Grocery,Acme,9.99,active,2026-01-01T00:00:00Z,products.csv
+P90001,Broken Item 1,Grocery,Acme,-4.00,active,2026-01-01T00:00:00Z,products.csv
+P90002,Broken Item 2,Grocery,Acme,9.99,recalled??,2026-01-01T00:00:00Z,products.csv
+P90003,Broken Item 3,Grocery,Acme,9.99,active,yesterday,products.csv
+P00060,Chartreuse Blender (stale copy),Home & Kitchen,Fitzgerald Brown and Edwards,81.88,active,2025-01-01T00:00:00Z,products.csv

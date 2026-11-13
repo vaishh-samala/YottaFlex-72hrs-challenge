@@ -1,0 +1,5 @@
+source_type,file_name,run_id,input_rows,valid_rows,rejected_rows,quarantine_rows,input_balanced,quarantine_balanced
+orders,orders.csv,run_20261112T185817_e67011,602,582,20,20,True,True
+orders,orders_batch_2.csv,run_20261112T185816_168422,156,155,1,1,True,True
+products,products.csv,run_20261112T185817_e67011,65,60,5,5,True,True
+products,products_update.csv,run_20261112T185816_168422,8,7,1,1,True,True

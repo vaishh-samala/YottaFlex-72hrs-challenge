@@ -1,0 +1,4 @@
+run_id,start_time,execution_status,input_rows,valid_rows,rejected_rows,quarantine_rows,orders_valid_rows,fact_rows_accounted,input_balanced,quarantine_balanced,warehouse_balanced
+run_20261112T185815_c9f527,2026-11-12 18:58:15.962875,SUCCESS,667,642,25,25,582,582,True,True,True
+run_20261112T185816_168422,2026-11-12 18:58:16.523087,SUCCESS,164,162,2,2,155,155,True,True,True
+run_20261112T185817_e67011,2026-11-12 18:58:17.529676,SUCCESS,667,642,25,25,582,582,True,True,True

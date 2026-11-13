@@ -1,0 +1,4 @@
+source_type,input_rows,rejected_rows,rejected_pct
+orders,758,21,2.77
+products,73,6,8.22
+ALL SOURCES,831,27,3.25

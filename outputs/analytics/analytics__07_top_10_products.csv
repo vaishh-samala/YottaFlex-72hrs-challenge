@@ -1,0 +1,11 @@
+product_id,product_name,category,revenue,quantity,orders
+P00058,LightSlateGray Comic,Books,68501.04,1021,9
+P00019,BlanchedAlmond Monitor,Electronics,24799.08,28,10
+P00006,Indigo Webcam,Electronics,20383.31,22,11
+P00032,Tan Speaker,Electronics,18558.34,28,15
+P00018,Indigo Speaker,Electronics,14179.56,20,7
+P00001,DarkOliveGreen Monitor,Electronics,12244.7,19,11
+P00038,FireBrick Cycling Helmet,Sports,12123.74,36,10
+P00012,MistyRose Lamp,Home & Kitchen,10984.95,43,15
+P00053,Red Speaker,Electronics,10621.71,23,8
+P00009,DarkKhaki Yoga Mat,Sports,7783.73,30,14
