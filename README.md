@@ -1,1377 +1,795 @@
-# YottaFlex 72-Hour Challenge — DataFlow
+# DataFlow: End-to-End E-Commerce Data Pipeline
 
-## End-to-End E-Commerce Data Engineering Pipeline
+**YottaFlex AI: 72-Hour Candidate Project Challenge (Data Engineering)**
 
-**A reliable, locally executable data engineering platform for CSV ingestion, data quality validation, transformation, warehouse loading, analytics, reconciliation, and pipeline monitoring.**
+DataFlow takes two messy CSV sources (orders and a product catalogue), checks every record, quarantines
+bad records with full lineage to the source line, and loads the clean data into a **DuckDB star schema**.
+Loading is transactional and idempotent. The project also includes SQL analytics, reconciliation checks,
+run history, a Streamlit dashboard and 102 automated tests.
 
-DataFlow is an end-to-end data engineering solution designed to process imperfect e-commerce data from multiple CSV sources and transform it into a reliable analytical warehouse.
+Everything runs locally: there is no cloud account, database server, API key or credential.
 
-The platform ingests order and product data, validates records, identifies duplicates and inconsistencies, quarantines invalid records with complete source traceability, and loads validated data into a DuckDB dimensional warehouse.
-
-It also provides SQL-based business analytics, data reconciliation, pipeline execution history, performance benchmarking, and an interactive Streamlit dashboard.
-
-**Key highlights**
-
-- End-to-end ETL pipeline.
-- Multi-source CSV ingestion.
-- Data validation and quality enforcement.
-- Rejected-record quarantine with source-line traceability.
-- DuckDB dimensional data warehouse.
-- Slowly Changing Dimension Type 2 (SCD Type 2).
-- Transactional loading and idempotent processing.
-- SQL analytics and reconciliation.
-- Pipeline monitoring and execution history.
-- Interactive Streamlit dashboard.
-- Automated test suite with 102 passing tests.
-
-**Designed to run locally without cloud services, API keys, or external credentials.**
-
----
-
-## 1. Project Overview
-
-### Problem Statement
-
-E-commerce businesses regularly receive data from multiple systems, including order management platforms and product information management systems.
-
-These datasets frequently contain:
-
-- Missing and null values.
-- Invalid dates and numerical values.
-- Duplicate and conflicting order records.
-- References to products that do not exist.
-- Unexpected changes in source schemas.
-- Late-arriving transactions.
-- Product price and status changes.
-- Inconsistent customer information.
-- Repeated file deliveries and failed processing attempts.
-
-Processing such data without appropriate validation and tracking can result in inaccurate business reports, duplicate transactions, incorrect revenue calculations, and loss of historical information.
-
-### Proposed Solution
-
-DataFlow addresses these challenges through a structured data engineering pipeline.
-
-It provides a repeatable process that:
-
-1. Ingests order and product CSV files.
-2. Validates source files and their schemas.
-3. Identifies invalid, duplicate, and inconsistent records.
-4. Preserves rejected records in a quarantine system.
-5. Transforms valid data into standardized analytical formats.
-6. Loads data into a DuckDB dimensional warehouse.
-7. Maintains historical product information using SCD Type 2.
-8. Prevents duplicate processing through file fingerprinting and idempotent loading.
-9. Tracks pipeline executions, processing metrics, and failures.
-10. Generates business analytics and reconciliation reports.
-
-### Primary Objectives
-
-| Objective | Implementation |
+| | |
 |---|---|
-| Reliable ingestion | Multi-source CSV ingestion |
-| Data quality | Record-level and batch-level validation |
-| Data traceability | Original source records and physical line numbers |
-| Historical tracking | SCD Type 2 product dimension |
-| Accurate analytics | DuckDB dimensional warehouse |
-| Duplicate prevention | SHA-256 file fingerprinting and upserts |
-| Failure recovery | Transactional loading and retry support |
-| Monitoring | Pipeline execution history and structured logs |
-| Business insights | SQL analytics and interactive dashboard |
+| **Stack** | Python 3.11+ · DuckDB · pandas · PyArrow/Parquet · Streamlit/Altair · pytest |
+| **Tests** | 102 passed (latest full run 2026-11-14, see [Testing](#20-testing-approach-and-results)) |
+| **Sample result** | 831 source rows → 804 valid + 27 quarantined; reconciliation ALL PASS |
+| **Scale check** | 102,480 source rows processed in 2.06 s (median of 5, Apple M1) |
 
 ---
 
-## 2. System Architecture
+## Contents
 
-DataFlow follows a modular ETL architecture consisting of ingestion, validation, transformation, loading, analytics, and monitoring stages.
+1. [Project overview](#1-project-overview)
+2. [Business problem and objectives](#2-business-problem-and-objectives)
+3. [Key features](#3-key-features)
+4. [Technology stack](#4-technology-stack)
+5. [System architecture](#5-system-architecture)
+6. [Repository structure](#6-repository-structure)
+7. [Source schemas and dimensional model](#7-source-schemas-and-dimensional-model)
+8. [Data ingestion workflow](#8-data-ingestion-workflow)
+9. [Data validation and business rules](#9-data-validation-and-business-rules)
+10. [Duplicate handling and quarantine](#10-duplicate-handling-and-rejected-record-quarantine)
+11. [Transformation and warehouse loading](#11-transformation-and-warehouse-loading)
+12. [Analytical SQL and dashboard](#12-analytical-sql-queries-and-dashboard)
+13. [Monitoring, logging and run history](#13-monitoring-logging-and-run-history)
+14. [Idempotency, retry and recovery](#14-idempotency-retry-and-recovery)
+15. [Installation and setup](#15-installation-and-setup)
+16. [Running the pipeline, tests and dashboard](#16-running-the-pipeline-tests-and-dashboard)
+17. [Sample outputs and expected results](#17-sample-outputs-and-expected-results)
+18. [Reconciliation and data-quality checks](#18-reconciliation-and-data-quality-checks)
+19. [Performance benchmark](#19-performance-benchmark-and-optimisation)
+20. [Testing approach and results](#20-testing-approach-and-results)
+21. [Design decisions and trade-offs](#21-design-decisions-and-trade-offs)
+22. [Assumptions and limitations](#22-assumptions-and-limitations)
+23. [Future improvements](#23-future-improvements)
+24. [AI usage disclosure](#24-ai-usage-disclosure)
+25. [Supporting documentation](#25-supporting-documentation)
 
-### Architecture Diagram
+---
+
+## 1. Project overview
+
+DataFlow is a batch ETL pipeline. One run (`python -m src.pipeline`) does the following:
+
+1. Reads an orders CSV and a products CSV, fingerprints them (SHA-256), and keeps an untouched copy of each.
+2. Skips any file whose exact content has already been loaded successfully.
+3. Checks every record against the source contract and business rules.
+4. Writes rejected records to a `quarantine` table and to Parquet, with the reason, the source file, the
+   line number and the exact original CSV text.
+5. Transforms the valid records and loads `dim_date`, `dim_customer`, `dim_product` (SCD Type 2) and
+   `fact_sales` in **one DuckDB transaction**, with integrity checks before `COMMIT`.
+6. Records the run (status, row counts, stage timings, warnings, errors) in `pipeline_runs`.
+
+The SQL files in `sql/` then produce business metrics and reconciliation results. The Streamlit
+dashboard displays the same queries.
+
+## 2. Business problem and objectives
+
+E-commerce source extracts are unreliable. Values are missing or malformed, rows are duplicated or
+contradict each other, orders reference products that do not exist, columns change, the same file is
+delivered twice, records arrive late, and catalogue prices change. If such data is loaded naively,
+revenue is wrong, orders are counted twice and history is lost.
+
+| Objective | How DataFlow meets it |
+|---|---|
+| Trustworthy revenue | Transaction price × quantity in exact `DECIMAL`; only `paid/shipped/delivered` counts as revenue |
+| No silent data loss | `input = valid + rejected` is enforced in code and checked again in SQL |
+| Traceable rejections | Every rejected row keeps file, line number, run, reasons and exact source text |
+| History-correct reporting | `dim_product` is SCD Type 2; each fact links to the product version valid at order time |
+| Safe re-runs | Content-hash ledger, upsert by business key, and an arrival-order guard |
+| No partial loads | One transaction per batch; integrity checks before commit; rollback on any error |
+| Operational visibility | `pipeline_runs`, `run_files`, JSON logs and a four-page dashboard |
+
+## 3. Key features
+
+- Two-source CSV ingestion with header normalisation (`Order Line ID` → `order_line_id`),
+  schema-drift detection and capture of malformed rows.
+- 17 record-level rejection reason codes plus three batch-level failure codes.
+- A quarantine table and Parquet files with `source_line`, the exact original CSV text of the record.
+- A star schema: `fact_sales` (one row per order line), `dim_product` (SCD2), `dim_customer`, `dim_date`.
+- Deterministic MD5-based surrogate keys, so independent rebuilds produce the same keys.
+- Idempotent loading: SHA-256 file ledger, `order_line_id` upsert, and a `source_seq` guard so that
+  replaying an old file cannot undo a newer correction.
+- One transaction per batch, integrity checks before commit, automatic recovery of interrupted runs.
+- A single-writer lock file that blocks simultaneous runs (CLI, dashboard button or threads).
+- 10 analytics queries, 4 reconciliation queries and 11 monitoring queries, all plain `.sql` files.
+- A Streamlit dashboard: Pipeline Overview, Data Quality, Business Analytics and Pipeline Runs.
+- A seeded synthetic data generator that writes injected-defect labels to a **separate** file.
+- A benchmark script and 102 pytest cases, each running in an isolated temporary warehouse.
+
+## 4. Technology stack
+
+| Technology | Version tested | Used for |
+|---|---|---|
+| Python | 3.14.3 (`requires-python >= 3.11`) | Orchestration, ingestion, validation |
+| DuckDB | 2.0.0 | Embedded analytical warehouse, SQL, transactions |
+| pandas / NumPy | 3.1.1 / 2.5.4 | Vectorised validation and staging |
+| PyArrow | 26.0.1 | Parquet export, zero-copy DataFrame → DuckDB loads |
+| Faker | 40.54.0 | Synthetic data generation |
+| Streamlit / Altair | 1.67.0 / 6.3.0 | Dashboard |
+| pytest | 9.2.0 | Automated tests |
+
+Minimum versions are pinned in [`requirements.txt`](requirements.txt). DuckDB was chosen because it gives
+a real SQL warehouse (transactions, `ASOF JOIN`, window functions, Parquet) with nothing to install or
+host. That suits a reproducible, laptop-scale challenge.
+
+## 5. System architecture
 
 ```mermaid
-flowchart TD
-    A["Orders CSV"] --> B["Data Ingestion"]
-    C["Products CSV"] --> B
-
-    B --> D["File Validation and Schema Checks"]
-    D --> E["File Fingerprinting and Run Tracking"]
-
-    E --> F["Data Quality Validation"]
-
-    F -->|"Invalid Records"| G["Quarantine System"]
-    F -->|"Valid Records"| H["Data Transformation"]
-
-    H --> I["Type Conversion and Standardization"]
-    I --> J["DuckDB Warehouse Loader"]
-
-    J --> K["Dimensional Warehouse"]
-    J --> L["Processed Parquet Files"]
-
-    K --> M["SQL Analytics"]
-    G --> N["Data Quality Monitoring"]
-    K --> O["Pipeline Monitoring"]
-
-    M --> P["Streamlit Dashboard"]
-    N --> P
-    O --> P
-
-    M --> Q["Analytics Reports"]
+flowchart LR
+    O[orders*.csv] --> I
+    P[products*.csv] --> I
+    I["Ingestion<br/>src/ingestion/reader.py<br/>SHA-256 · header normalise<br/>schema drift · malformed rows"]
+    I --> R[("data/raw/&lt;run_id&gt;/<br/>untouched copies")]
+    I --> L{"Ledger<br/>processed_files"}
+    L -- "already SUCCESS<br/>(no --force)" --> S["Run SKIPPED"]
+    L -- "new / failed / --force" --> V["Validation<br/>src/validation/rules.py<br/>record rules · duplicates<br/>row accounting · reject threshold"]
+    V -- invalid --> Q[("quarantine table<br/>+ data/quarantine/&lt;run_id&gt;/*.parquet")]
+    V -- valid --> T["Transformation<br/>src/transformation/transform.py<br/>UTC · surrogate keys · row hashes"]
+    T --> W["Load: ONE transaction<br/>src/warehouse/loader.py<br/>dims → SCD2 windows → fact upsert<br/>→ integrity checks → COMMIT"]
+    W --> DW[("DuckDB star schema<br/>fact_sales · dim_product (SCD2)<br/>dim_customer · dim_date")]
+    W --> PQ[("data/processed/<br/>valid Parquet + snapshot")]
+    DW --> SQL["sql/analytics<br/>sql/reconciliation<br/>sql/monitoring"]
+    Q --> SQL
+    SQL --> D["Streamlit dashboard<br/>(read-only)"]
+    SQL --> RPT["scripts/run_analytics.py<br/>→ outputs/"]
+    D -. "Run pipeline<br/>(subprocess + lock)" .-> I
 ```
 
-### Pipeline Workflow
+Each stage writes its row counts and timings to `pipeline_runs`. The lifecycle of a run, the
+concurrency model and the module map are in [`docs/architecture.md`](docs/architecture.md).
 
-| Stage | Description |
-|---|---|
-| 1. Ingestion | Reads order and product CSV files and checks file availability and structure. |
-| 2. File tracking | Generates SHA-256 fingerprints and identifies previously processed files. |
-| 3. Validation | Checks required fields, data types, duplicates, business rules, and product references. |
-| 4. Quarantine | Stores rejected records with rejection reasons and source traceability. |
-| 5. Transformation | Standardizes data types, timestamps, dates, and identifiers. |
-| 6. Warehouse loading | Loads dimensions and facts into DuckDB within a single transaction. |
-| 7. Analytics | Executes SQL queries for business metrics and reconciliation. |
-| 8. Monitoring | Tracks pipeline runs, execution times, file statuses, warnings, and failures. |
-| 9. Visualization | Presents analytical and operational information through Streamlit. |
-
-For detailed technical documentation, refer to:
-
-- `docs/architecture.md`
-- `docs/design_decisions.md`
-- `docs/data_dictionary.md`
-
----
-
-## 3. Technology Stack
-
-The project uses lightweight, locally executable technologies selected for reliability, analytical performance, and ease of deployment.
-
-| Technology | Purpose |
-|---|---|
-| Python 3.11+ | Core programming language and pipeline orchestration |
-| DuckDB | Analytical database and dimensional warehouse |
-| SQL | Data modeling, transformations, analytics, and reconciliation |
-| Pandas | Record-level data validation and processing |
-| PyArrow | Parquet processing and analytical data exchange |
-| Parquet | Processed data and quarantine storage |
-| Streamlit | Interactive monitoring and analytics dashboard |
-| Altair | Dashboard visualizations |
-| Faker | Synthetic test data generation |
-| NumPy | Deterministic data generation |
-| Pytest | Automated testing |
-| Python Logging | Structured application and pipeline logging |
-| Git and GitHub | Version control and project management |
-
-### Why These Technologies?
-
-**Python**
-
-Python provides a flexible environment for data ingestion, validation, transformation, and orchestration.
-
-**DuckDB**
-
-DuckDB provides an embedded analytical database without requiring a separate database server. It supports efficient SQL queries and analytical workloads.
-
-**Pandas**
-
-Pandas simplifies record-level validation, duplicate detection, and data transformation.
-
-**Parquet**
-
-Parquet provides a columnar storage format suitable for analytical data processing.
-
-**Streamlit**
-
-Streamlit allows operational and business metrics to be presented through an interactive dashboard without requiring a separate frontend application.
-
-**Pytest**
-
-Pytest provides automated verification of data quality rules, warehouse operations, failure recovery, idempotency, and dashboard behavior.
-
----
-
-## 4. Project Structure
+## 6. Repository structure
 
 ```text
 YottaFlex-72hrs-challenge/
-│
-├── data/
-│   ├── sample/
-│   │   ├── orders.csv
-│   │   ├── products.csv
-│   │   ├── orders_batch_2.csv
-│   │   └── products_update.csv
-│   │
-│   ├── labels/
-│   │   └── sample/
-│   │
-│   ├── raw/
-│   │   └── <run_id>/
-│   │
-│   ├── processed/
-│   │   └── <run_id>/
-│   │
-│   ├── quarantine/
-│   │   └── <run_id>/
-│   │
-│   └── warehouse.duckdb
-│
 ├── src/
-│   ├── config.py
-│   ├── schemas.py
-│   ├── datagen.py
-│   ├── pipeline.py
-│   │
-│   ├── ingestion/
-│   │   └── reader.py
-│   │
-│   ├── validation/
-│   │   └── rules.py
-│   │
-│   ├── transformation/
-│   │   └── transform.py
-│   │
-│   ├── warehouse/
-│   │   ├── database.py
-│   │   └── loader.py
-│   │
-│   ├── analytics/
-│   │   └── queries.py
-│   │
-│   └── monitoring/
-│       ├── logging_setup.py
-│       ├── run_history.py
-│       ├── lock.py
-│       └── trigger.py
-│
+│   ├── pipeline.py              # orchestrator + CLI (python -m src.pipeline)
+│   ├── config.py                # paths/thresholds, DATAFLOW_* env overrides
+│   ├── schemas.py               # source contracts, allowed statuses, bounds
+│   ├── datagen.py               # seeded synthetic data with injected defects
+│   ├── ingestion/reader.py      # file checks, normalisation, drift, malformed rows, raw copy
+│   ├── validation/rules.py      # record rules, reason codes, duplicate logic, row accounting
+│   ├── transformation/transform.py  # surrogate keys, staging frames
+│   ├── warehouse/database.py    # connections (retry on lock), DDL bootstrap
+│   ├── warehouse/loader.py      # transactional idempotent load, SCD2, integrity checks
+│   ├── analytics/queries.py     # runs the SQL files in sql/
+│   └── monitoring/              # JSON logging, run history, lock file, dashboard trigger
 ├── sql/
-│   ├── ddl/
-│   ├── analytics/
-│   ├── reconciliation/
-│   └── monitoring/
-│
+│   ├── ddl/warehouse.sql        # all tables and views
+│   ├── analytics/               # 01–10 business queries
+│   ├── reconciliation/          # 01–04 accounting checks
+│   └── monitoring/              # run, file and quarantine queries used by the dashboard
 ├── scripts/
-│   ├── generate_data.py
-│   ├── run_analytics.py
-│   └── benchmark.py
-│
-├── dashboard/
-│   └── app.py
-│
-├── tests/
-│
-├── docs/
-│   ├── architecture.md
-│   ├── data_dictionary.md
-│   ├── design_decisions.md
-│   ├── ai_prompt_history.md
-│   └── screenshots/
-│
-├── outputs/
-│   ├── analytics/
-│   ├── analytics_report.md
-│   ├── benchmark_report.md
-│   ├── benchmark_results.json
-│   └── test_results.txt
-│
-├── logs/
-│   └── pipeline.log
-│
-├── requirements.txt
-├── pyproject.toml
-├── .gitignore
-└── README.md
+│   ├── generate_data.py         # CLI for the generator
+│   ├── run_analytics.py         # runs all queries → outputs/analytics/*.csv + report
+│   └── benchmark.py             # timing benchmark → outputs/benchmark_*
+├── dashboard/app.py             # Streamlit app (4 pages)
+├── tests/                       # 102 pytest cases (isolated temp warehouses)
+├── data/
+│   ├── sample/                  # committed input: 2 order files, 2 product files
+│   ├── labels/sample/           # injected-defect labels (never read by the pipeline)
+│   └── raw/ processed/ quarantine/   # created at run time (git-ignored)
+├── outputs/                     # committed evidence: analytics, reconciliation, benchmark, tests
+├── docs/                        # architecture, data dictionary, decisions, testing, performance, screenshots
+├── prompt_history/              # AI prompts used during development
+├── logs/                        # pipeline.log (JSON lines), created at run time
+├── requirements.txt · pyproject.toml · .streamlit/config.toml · .gitignore
 ```
 
-*Note: Runtime-generated directories and database files are created during execution. The structure above describes the project's logical organization.*
+`data/warehouse.duckdb`, `data/raw/*`, `data/processed/*`, `data/quarantine/*` and `logs/*` are generated
+by a run and are git-ignored.
 
----
+## 7. Source schemas and dimensional model
 
-## 5. Data Sources and Input Schemas
+### Source contracts (`src/schemas.py`)
 
-DataFlow processes two independent CSV sources.
+**Orders**: one row per order line, primary key `order_line_id`
 
-### 5.1 Orders Dataset
-
-Primary key: `order_line_id`
-
-| Column | Description |
-|---|---|
-| order_line_id | Unique order-line identifier |
-| order_id | Order identifier |
-| customer_id | Customer identifier |
-| product_id | Product reference |
-| order_timestamp | Transaction timestamp in ISO-8601 format |
-| quantity | Ordered quantity (1–1000) |
-| unit_price | Transaction price, greater than zero, up to two decimal places |
-| order_status | Order processing status |
-| source_file | Optional source file identifier |
-
-Supported order statuses:
-
-- pending
-- paid
-- shipped
-- delivered
-- cancelled
-- returned
-
-### 5.2 Products Dataset
-
-Primary key: `product_id`, with versions identified by `updated_at`.
-
-| Column | Description |
-|---|---|
-| product_id | Unique product identifier |
-| product_name | Product name |
-| category | Product category |
-| brand | Brand name (nullable) |
-| list_price | Product catalog price |
-| product_status | Product availability status |
-| updated_at | Product update timestamp |
-| source_file | Optional source file identifier |
-
-Supported product statuses:
-
-- active
-- discontinued
-- out_of_stock
-
-Detailed schemas, validation rules, null handling, and rejection reason codes are documented in `docs/data_dictionary.md`.
-
----
-
-## 6. Data Warehouse Design
-
-The analytical warehouse follows a dimensional modeling approach using a star schema.
-
-### Fact Table
-
-**`fact_sales`**
-
-Grain: One row per order line.
-
-Important columns:
-
-- `sales_key`
-- `order_line_id`
-- `order_id`
-- `product_key`
-- `customer_key`
-- `customer_id`
-- `date_key`
-- `order_timestamp`
-- `quantity`
-- `unit_price`
-- `total_amount`
-- `order_status`
-- `run_id`
-- `row_hash`
-- `source_file`
-- `source_seq`
-- `first_run_id`
-- `loaded_at`
-
-The `total_amount` column is calculated as:
-
-```text
-total_amount = quantity × unit_price
-```
-
-The transaction price is retained independently of the product's current catalog price.
-
-### Dimension Tables
-
-**`dim_product` — SCD Type 2**
-
-Maintains product history through versioned records.
-
-Important attributes:
-
-- `product_key`
-- `product_id`
-- `product_name`
-- `category`
-- `brand`
-- `list_price`
-- `valid_from`
-- `valid_to`
-- `is_current`
-
-Historical facts reference the product version valid at the time of the transaction.
-
-**`dim_customer` — Type 1**
-
-Maintains customer identifiers and first-order information.
-
-**`dim_date`**
-
-Provides calendar attributes including:
-
-- Date key.
-- Full date.
-- Day.
-- Month.
-- Month name.
-- Quarter.
-- Year.
-- Weekday.
-- Weekend indicator.
-
-### Operational Tables
-
-The warehouse also maintains:
-
-- `pipeline_runs`
-- `run_files`
-- `processed_files`
-- `quarantine`
-
-Surrogate keys are deterministic, generated using MD5 of business keys, and remain consistent across warehouse rebuilds.
-
----
-
-## 7. Key Features and Engineering Capabilities
-
-### 7.1 Multi-Source Data Ingestion
-
-- Reads independent orders and products CSV files.
-- Validates file availability and required columns.
-- Detects unexpected schema changes.
-- Handles malformed CSV records.
-- Preserves untouched source files for traceability.
-
-### 7.2 Data Quality and Validation
-
-The validation layer checks:
-
-- Missing required fields.
-- Null values.
-- Invalid data types.
-- Negative and zero quantities.
-- Invalid prices.
-- Invalid timestamps.
-- Future timestamps.
-- Duplicate order-line identifiers.
-- Conflicting duplicate records.
-- Unknown product references.
-- Invalid order statuses.
-- Product catalog inconsistencies.
-
-### 7.3 Rejected-Record Quarantine
-
-Invalid records are not silently discarded.
-
-Each quarantined record preserves:
-
-- Source file.
-- Physical source row number.
-- Run identifier.
-- Primary rejection reason.
-- Detailed rejection reasons.
-- Original parsed record.
-- Exact original source-line text.
-
-Rejected records are also exported to Parquet.
-
-The pipeline enforces the accounting invariant:
-
-```text
-Total Input Rows = Valid Rows + Rejected Rows
-```
-
-If records cannot be fully accounted for, the validation process fails rather than silently losing data.
-
-### 7.4 Slowly Changing Dimensions
-
-Product catalog changes are tracked using SCD Type 2.
-
-This ensures historical transactions retain the product attributes applicable at the time of sale rather than being associated with the latest catalog version.
-
-### 7.5 Idempotent Data Processing
-
-The pipeline uses:
-
-- SHA-256 file fingerprinting.
-- A persistent processed-file ledger.
-- Business-key-based fact upserts.
-- Duplicate prevention.
-- Retryable failed files.
-- Forced reprocessing.
-
-Processing an identical file again does not create duplicate fact records.
-
-### 7.6 Transactional Loading
-
-Warehouse loading is performed within a single transaction.
-
-The transaction covers:
-
-1. Dimension updates.
-2. Product history updates.
-3. Fact upserts.
-4. Quarantine persistence.
-5. Processing ledger updates.
-6. Integrity checks.
-
-If loading fails, the transaction rolls back instead of leaving partially committed warehouse data.
-
-### 7.7 Pipeline Monitoring
-
-The system tracks:
-
-- Run status.
-- Start and end timestamps.
-- Execution duration.
-- Records ingested.
-- Valid records.
-- Rejected records.
-- File processing status.
-- Warnings and errors.
-- Stage-level execution metrics.
-
-Structured logs are written to `logs/pipeline.log`.
-
-### 7.8 Business Analytics
-
-SQL analytics provide:
-
-- Total recognized revenue.
-- Total orders.
-- Total quantity sold.
-- Daily and monthly revenue.
-- Revenue by category.
-- Top products.
-- Top customers.
-- Average order value.
-- Rejected-record percentages.
-
-### 7.9 Interactive Dashboard
-
-The Streamlit dashboard provides four pages:
-
-| Dashboard Page | Functionality |
-|---|---|
-| Pipeline Overview | Run counts, ingestion metrics, rejection metrics, and trends |
-| Data Quality | Rejection categories, reasons, and searchable rejected records |
-| Business Analytics | Revenue, orders, units, AOV, category analysis, and rankings |
-| Pipeline Runs | Execution history, stage timings, file details, warnings, and errors |
-
-The dashboard also includes a Run Pipeline action for the sample batches.
-
----
-
-## 8. Installation and Setup
-
-### Prerequisites
-
-- Python 3.11 or newer.
-- Git.
-- VS Code or another code editor.
-- Terminal or command prompt.
-
-No cloud account, external database server, API key, or paid service is required.
-
-### Step 1: Clone the Repository
-
-```bash
-git clone https://github.com/YOUR-GITHUB-USERNAME/yottaflex-72hrs-challenge.git
-```
-
-Replace `YOUR-GITHUB-USERNAME` with your actual GitHub username.
-
-Navigate to the project directory containing `requirements.txt`.
-
-```bash
-cd yottaflex-72hrs-challenge
-```
-
-If the repository contains the application inside a nested `dataflow/` directory, navigate into that directory before continuing.
-
-### Step 2: Create a Virtual Environment
-
-**macOS / Linux**
-
-```bash
-python3 -m venv .venv
-```
-
-Activate it:
-
-```bash
-source .venv/bin/activate
-```
-
-**Windows PowerShell**
-
-```powershell
-py -3.12 -m venv .venv
-```
-
-Activate it:
-
-```powershell
-.venv\Scripts\Activate.ps1
-```
-
-**Windows Command Prompt**
-
-```cmd
-py -3.12 -m venv .venv
-```
-
-Activate it:
-
-```cmd
-.venv\Scripts\activate.bat
-```
-
-### Step 3: Upgrade pip
-
-```bash
-python -m pip install --upgrade pip
-```
-
-### Step 4: Install Dependencies
-
-```bash
-python -m pip install -r requirements.txt
-```
-
-### Step 5: Verify Installation
-
-```bash
-python --version
-```
-
-Confirm that Python 3.11 or newer is being used.
-
-Run the automated tests:
-
-```bash
-python -m pytest -q
-```
-
-Expected result from the recorded full test run:
-
-```text
-102 passed
-```
-
----
-
-## 9. Generate Sample Data
-
-The project includes sample datasets under `data/sample/`.
-
-To regenerate the sample data:
-
-```bash
-python scripts/generate_data.py --sample
-```
-
-The generator creates both order and product datasets and a separate labels file describing injected defects.
-
-### Generate Custom Datasets
-
-Generate 1,000 order lines:
-
-```bash
-python scripts/generate_data.py --rows 1000
-```
-
-Generate 100,000 order lines and 2,000 products:
-
-```bash
-python scripts/generate_data.py --orders 100000 --products 2000 --seed 42
-```
-
-Generate data with a second batch:
-
-```bash
-python scripts/generate_data.py --orders 100000 --products 2000 --with-increment
-```
-
-### Supported Arguments
-
-| Argument | Default | Description |
+| Column | Required | Rule summary |
 |---|---|---|
-| `--sample` | Off | Generates the committed demo dataset |
-| `--orders N` | 600 | Number of requested order lines |
-| `--rows N` | 600 | Alias for `--orders` |
-| `--products N` | 60 | Number of products |
-| `--seed N` | 42 | Random seed |
-| `--defect-rate F` | 0.03 | Injected order-line defect rate |
-| `--out DIR` | Generated directory | Input output location |
-| `--labels DIR` | Labels directory | Defect labels location |
-| `--with-increment` | Off | Generates incremental product and order files |
+| `order_line_id` | yes | Unique within the batch |
+| `order_id` | yes | All lines of an order must have the same customer |
+| `customer_id` | yes | |
+| `product_id` | yes | Must exist in this batch's valid products or in `dim_product` |
+| `order_timestamp` | yes | ISO-8601, converted to UTC; between 2000-01-01 and run time + 24 h |
+| `quantity` | yes | Integer, 1–1000 |
+| `unit_price` | yes | > 0, ≤ 1,000,000, at most 2 decimals |
+| `order_status` | yes | `pending, paid, shipped, delivered, cancelled, returned` (case-insensitive) |
+| `source_file` | no | Always overwritten with the real file name (lineage) |
 
-The physical CSV row count may exceed the requested order-line count because the generator intentionally injects duplicates and malformed records.
+**Products**: primary key `product_id`, versioned by `updated_at`
 
-The separate defect-label files are used for verification and are not read by the pipeline.
+| Column | Required | Rule summary |
+|---|---|---|
+| `product_id`, `product_name`, `category` | yes | |
+| `brand` | **no** | Nullable |
+| `list_price` | yes | Same numeric rules as `unit_price`; catalogue price only, never used for revenue |
+| `product_status` | yes | `active, discontinued, out_of_stock` |
+| `updated_at` | yes | Becomes the SCD2 `valid_from` |
+| `source_file` | no | As for orders |
 
----
+### Target star schema (`sql/ddl/warehouse.sql`)
 
-## 10. Execute the Data Pipeline
+```mermaid
+erDiagram
+    fact_sales }o--|| dim_product : "product_key (version valid at order time)"
+    fact_sales }o--|| dim_customer : customer_key
+    fact_sales }o--|| dim_date : date_key
+    fact_sales {
+        BIGINT sales_key PK
+        VARCHAR order_line_id UK
+        VARCHAR order_id
+        BIGINT product_key FK
+        BIGINT customer_key FK
+        INTEGER date_key FK
+        TIMESTAMP order_timestamp
+        INTEGER quantity
+        DECIMAL unit_price
+        DECIMAL total_amount
+        VARCHAR order_status
+    }
+    dim_product {
+        BIGINT product_key PK
+        VARCHAR product_id
+        VARCHAR product_name
+        VARCHAR category
+        DECIMAL list_price
+        TIMESTAMP valid_from
+        TIMESTAMP valid_to
+        BOOLEAN is_current
+    }
+    dim_customer {
+        BIGINT customer_key PK
+        VARCHAR customer_id UK
+        DATE first_order_date
+    }
+    dim_date {
+        INTEGER date_key PK
+        DATE full_date
+        INTEGER month
+        INTEGER quarter
+        INTEGER year
+        BOOLEAN is_weekend
+    }
+```
 
-Run the initial sample batch:
+| Table | Type | Grain / notes |
+|---|---|---|
+| `fact_sales` | Fact | One row per order line. `total_amount = quantity × unit_price` as `DECIMAL(18,2)`. Lineage columns: `row_hash`, `source_file`, `source_seq`, `run_id`, `first_run_id`, `loaded_at` |
+| `dim_product` | SCD Type 2 | One row per (`product_id`, `updated_at`). `valid_from`/`valid_to`/`is_current` |
+| `dim_customer` | Type 1 | `customer_id`, `first_order_date` (moved earlier if a late order arrives) |
+| `dim_date` | Calendar | `YYYYMMDD` key; a continuous range covering every order date |
+| `pipeline_runs`, `run_files`, `processed_files`, `quarantine` | Operational | Run history, per-file counts, idempotency ledger, rejected rows |
+| `v_sales`, `v_current_file_runs`, `v_quarantine_current`, `v_quarantine_reasons` | Views | Analytics join; latest processing of each file (avoids double counting) |
+
+Every column is documented in [`docs/data_dictionary.md`](docs/data_dictionary.md).
+
+## 8. Data ingestion workflow
+
+`src/ingestion/reader.py`:
+
+1. **File check.** A missing path raises `SOURCE_UNAVAILABLE`, which fails the batch.
+2. **Fingerprint.** The SHA-256 of the file content becomes the idempotency key.
+3. **Header.** BOM stripped, names converted to snake_case. Duplicate names after normalisation, or a
+   missing mandatory column, raise `SCHEMA_MISMATCH` (batch failure). An extra column produces a
+   `SCHEMA_DRIFT` warning: it is ignored for loading but kept in the raw copy.
+4. **Rows.** Parsed with Python's `csv` module, **every value kept as text**, so a bad value becomes
+   a traceable rejection and never crashes the run. Rows with the wrong number of fields become
+   `MALFORMED_RECORD`. Blank lines are counted in a `BLANK_LINES` warning. Null tokens (`""`, `NULL`,
+   `None`, `NaN`, `N/A`, …) are converted to null.
+5. **Exact text.** A line recorder keeps the original text of each record, which becomes
+   `quarantine.source_line` if the record is rejected.
+6. **Raw copy.** The untouched file is copied to `data/raw/<run_id>/`.
+7. **Ledger.** If the file's hash is already `SUCCESS` in `processed_files` and `--force` was not given,
+   the file is skipped. If both files are skipped, the run status is `SKIPPED`.
+
+An empty file (zero bytes or header only) gives an `EMPTY_FILE` warning, not an error.
+
+## 9. Data validation and business rules
+
+`src/validation/rules.py` builds one vectorised boolean mask per rule. A record can fail several rules,
+and all of its reasons are stored.
+
+| Reason code | Rule |
+|---|---|
+| `MISSING_REQUIRED_FIELD` | A required column is null |
+| `INVALID_DATA_TYPE` | `quantity` is not an integer, or a price is not numeric |
+| `INVALID_TIMESTAMP` | Not a parseable ISO-8601 value (ambiguous formats such as `31/12/2026` are rejected) |
+| `TIMESTAMP_OUT_OF_RANGE` | Before 2000-01-01 or more than 24 h after the run time |
+| `NEGATIVE_QUANTITY` / `ZERO_QUANTITY` / `QUANTITY_OUT_OF_RANGE` | Quantity < 0 / = 0 / > 1000 |
+| `INVALID_PRICE` / `INVALID_PRICE_PRECISION` | ≤ 0 or > 1,000,000 / more than 2 decimals |
+| `INVALID_STATUS` | Status not in the allowed set (after trimming and lower-casing) |
+| `INVALID_PRODUCT_REFERENCE` | `product_id` not in this batch's valid products or in `dim_product` |
+| `INCONSISTENT_ORDER_CUSTOMER` | An `order_id` linked to more than one `customer_id` (in the batch or against the warehouse): **every line of that order in the batch is rejected** |
+| `DUPLICATE_RECORD`, `CONFLICTING_DUPLICATE_KEY`, `SUPERSEDED_DUPLICATE`, `CONFLICTING_PRODUCT_VERSION` | See §10 |
+| `MALFORMED_RECORD` | Wrong number of fields (from ingestion) |
+
+**Batch-level failures** (nothing is loaded and the run is recorded as `FAILED`): `SOURCE_UNAVAILABLE`,
+`SCHEMA_MISMATCH`, and `REJECT_THRESHOLD_EXCEEDED`. The last one applies when more than
+`max_reject_ratio` (default 50 %) of a file's rows are rejected, which usually means a broken export.
+The rejected rows of that batch are still written to quarantine for diagnosis.
+
+**Row accounting.** `check_accounting()` raises `ValidationInvariantError` (the batch fails and is rolled
+back) if `valid + rejected ≠ input`, or if two valid rows still share a grain key. Validation never
+deletes a row itself.
+
+The reasons for the whole-order rejection rule and its measured impact are in
+[`docs/design_decisions.md` D14](docs/design_decisions.md).
+
+## 10. Duplicate handling and rejected-record quarantine
+
+| Situation | Outcome |
+|---|---|
+| Same `order_line_id`, identical content | First physical row loaded; the other copies → `DUPLICATE_RECORD` |
+| Same `order_line_id`, different content, same file | **All** copies → `CONFLICTING_DUPLICATE_KEY` (there is no basis for choosing one) |
+| Same `product_id` several times in a file | Latest `updated_at` kept; older rows → `SUPERSEDED_DUPLICATE`; ties with different content → `CONFLICTING_DUPLICATE_KEY` |
+| Product version (`product_id` + `updated_at`) already loaded with different attributes | `CONFLICTING_PRODUCT_VERSION` (history is never silently rewritten) |
+| Same `order_line_id` arriving in a **later file** | Not a duplicate: it is an upsert (see §14) |
+
+**Quarantine record.** Each rejected row is written inside the load transaction to the `quarantine` table
+and to `data/quarantine/<run_id>/<source>_rejected.parquet`. It contains:
+
+`run_id · source_type · source_file · file_hash · source_row_number (physical line, header = 1) ·
+record_id · primary_reason · rejection_reasons ("CODE: detail; …") · raw_record (JSON) ·
+source_line (exact original CSV text) · rejected_at`
+
+The quarantine table is append-only per run. The views `v_quarantine_current` and `v_current_file_runs`
+count only the latest successful processing of each file, so forced reruns are not counted twice.
+
+## 11. Transformation and warehouse loading
+
+**Transformation** (`src/transformation/transform.py`):
+
+- Timestamps → UTC; `date_key = YYYYMMDD` of the UTC date.
+- Surrogate keys = first 60 bits of `md5(prefix | business key)`, so they are the same in every rebuild.
+- `row_hash` of the business attributes, used to detect changed re-deliveries.
+- `dim_date` is generated as a continuous calendar covering the batch's order dates.
+
+**Loading** (`src/warehouse/loader.py`) runs inside **one** `BEGIN … COMMIT`:
+
+1. `dim_date`: insert dates that are not yet present.
+2. `dim_customer`: insert new customers; move `first_order_date` earlier if a late order arrives.
+3. `dim_product`: insert new versions, then recalculate the SCD2 windows with `LEAD()` (this also
+   handles back-dated updates) and re-point affected facts to the correct version.
+4. `fact_sales`: link each order to its product version with an `ASOF JOIN` on `order_timestamp`, then
+   upsert on `order_line_id` (insert new, update changed, leave identical rows alone, skip stale rows).
+5. Integrity checks: no orphan product, customer or date keys; one current version per product; no
+   overlapping windows; unique order lines; `total_amount = quantity × unit_price`.
+6. Quarantine rows and ledger entries, then `COMMIT`. Any exception → `ROLLBACK`.
+
+All writes are set-based: a pandas frame is registered with DuckDB and loaded with one
+`INSERT … SELECT` or `UPDATE … FROM`.
+
+## 12. Analytical SQL queries and dashboard
+
+Revenue = the sum of `quantity × unit_price` for lines with status `paid`, `shipped` or `delivered`.
+`pending`, `cancelled` and `returned` lines stay in the fact table but are reported separately.
+
+| File (`sql/analytics/`) | Question |
+|---|---|
+| `01_total_revenue.sql` | Recognised revenue, plus pending and cancelled/returned value |
+| `02_total_orders.sql` | Revenue orders, all orders, order lines |
+| `03_total_quantity.sql` | Units sold |
+| `04_daily_revenue.sql` | Revenue, orders and units per day |
+| `05_monthly_revenue.sql` | Revenue and orders per month |
+| `06_revenue_by_category.sql` | Revenue by category (category at time of sale) and share % |
+| `07_top_10_products.sql` | Top 10 products by revenue |
+| `08_top_10_customers.sql` | Top 10 customers by purchase value |
+| `09_average_order_value.sql` | AOV = revenue ÷ distinct revenue orders |
+| `10_rejected_record_pct.sql` | Rejected % by source and overall |
+
+The reconciliation queries are in `sql/reconciliation/` (§18). The run, file and quarantine queries
+are in `sql/monitoring/`.
+
+**Dashboard** (`dashboard/app.py`). It opens the warehouse read-only for each page and runs the same
+SQL files, so no values are hard-coded.
+
+| Page | Shows |
+|---|---|
+| Pipeline Overview | Total/successful/failed/skipped runs; records ingested, valid and rejected; last execution; charts of valid vs rejected rows per run and run duration |
+| Data Quality | Failures by category and reason; searchable rejected rows with file, line and source text; scope switch (current / all runs) |
+| Business Analytics | Revenue, orders, units, AOV, daily/monthly trend, category split, top products and customers |
+| Pipeline Runs | Run history, stage timings, per-file actions, warnings and errors; **Run pipeline** button for sample batch 1 or 2, with an optional "Force reprocess" (disabled while a run holds the lock) |
+
+Screenshots: [`docs/screenshots/`](docs/screenshots/)
+([overview](docs/screenshots/1_overview.png) ·
+[data quality](docs/screenshots/2_data_quality.png) ·
+[business](docs/screenshots/3_business.png) ·
+[runs](docs/screenshots/4_runs.png)).
+
+## 13. Monitoring, logging and run history
+
+| Mechanism | Where | Contents |
+|---|---|---|
+| Run history | `pipeline_runs` table | `run_id`, start/end, duration, status `RUNNING/SUCCESS/FAILED/SKIPPED`, trigger (`cli/dashboard/test/benchmark`), `forced`, input/valid/rejected/output rows per source, facts inserted/updated/unchanged/stale-skipped, timing for each of the four stages, warnings (JSON), error (`[batch|system:CODE] message`) |
+| Per-file record | `run_files` table | File name, SHA-256, action (`PROCESSED/SKIPPED_ALREADY_PROCESSED/FAILED`), row counts |
+| Idempotency ledger | `processed_files` table | Hash, status, attempts, last error, arrival sequence |
+| Structured log | `logs/pipeline.log` | One JSON object per line: `ts`, `level`, `run_id`, `stage`, message, extra fields |
+| Console log | stderr | `HH:MM:SS LEVEL [run_id] [stage] message` |
+| Run summary | stdout | JSON summary of each run (status, metrics, warnings, error) |
+
+## 14. Idempotency, retry and recovery
+
+| Layer | Mechanism | Effect |
+|---|---|---|
+| File | SHA-256 ledger in `processed_files` | An identical file is skipped, even if renamed. A failed file is **not** marked done, so it is retried on the next run |
+| Row | Upsert on `order_line_id` + `row_hash` | Identical rows are untouched; changed rows are updated in place; new rows are inserted |
+| Ordering | `source_seq` (arrival order of the file) | Replaying an older file cannot overwrite a newer correction (counted as `facts_stale_skipped`) |
+| Transaction | One `BEGIN … COMMIT` per batch + integrity checks | A failure leaves the warehouse exactly as before |
+| Crash | `mark_stale_runs()` at the start of the next run | A run left `RUNNING` by a killed process is marked `FAILED` |
+| Concurrency | `logs/pipeline.lock` created with `O_EXCL` (pid + run_id) | A second run exits with code 2; locks left by dead processes are cleared |
+
+`--force` reprocesses files that were already loaded. Because the upsert is idempotent, a forced rerun of
+unchanged files gives 0 inserts and 0 updates (verified, §18).
+
+## 15. Installation and setup
+
+**Prerequisites:** Python **3.11 or newer** and Git. Nothing else is needed: no database server, cloud
+account or API key.
+
+### macOS / Linux
 
 ```bash
+git clone https://github.com/vaishh-samala/YottaFlex-72hrs-challenge.git
+cd YottaFlex-72hrs-challenge
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+python --version            # must be 3.11+
+```
+
+### Windows (PowerShell)
+
+```powershell
+git clone https://github.com/vaishh-samala/YottaFlex-72hrs-challenge.git
+cd YottaFlex-72hrs-challenge
+py -3 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+# If activation is blocked: Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+python --version            # must be 3.11+
+```
+
+> The project was developed and verified on macOS. The Windows commands are standard equivalents and
+> have **not** been run on a Windows machine (see §22).
+
+## 16. Running the pipeline, tests and dashboard
+
+Run every command from the repository root with the virtual environment active. Unless stated
+otherwise, each command is the same on macOS/Linux and on Windows PowerShell.
+
+### Pipeline
+
+```bash
+# 1. First sample batch (data/sample/orders.csv + products.csv)
 python -m src.pipeline
-```
 
-Run the second batch:
+# 2. Second batch: new orders, status corrections, product updates
+python -m src.pipeline --orders data/sample/orders_batch_2.csv --products data/sample/products_update.csv
 
-```bash
-python -m src.pipeline \
-  --orders data/sample/orders_batch_2.csv \
-  --products data/sample/products_update.csv
-```
-
-Run the same files again:
-
-```bash
+# 3. Same files again → status SKIPPED (idempotency)
 python -m src.pipeline
-```
 
-The already processed files should be skipped.
-
-Force reprocessing:
-
-```bash
+# 4. Force reprocessing → 0 inserts, 0 updates
 python -m src.pipeline --force
 ```
 
-### Pipeline Options
-
-| Option | Description |
+| Option | Meaning |
 |---|---|
-| `--orders PATH` | Custom orders CSV |
-| `--products PATH` | Custom products CSV |
-| `--db PATH` | Custom DuckDB database path |
-| `--max-reject-ratio 0.5` | Configure the maximum rejected-record ratio |
-| `--force` | Reprocess previously loaded files |
+| `--orders PATH` / `--products PATH` | Input files (default: the sample batch 1 files) |
+| `--db PATH` | Warehouse file (default `data/warehouse.duckdb`) |
+| `--force` | Reprocess files that were already loaded |
+| `--max-reject-ratio F` | Batch rejection threshold, 0–1 (default 0.5) |
 
-### Exit Codes
+Exit codes: **0** = SUCCESS or SKIPPED, **1** = FAILED, **2** = another run holds the lock.
 
-| Code | Meaning |
+### Analytics and reconciliation
+
+```bash
+python scripts/run_analytics.py                         # all queries → outputs/analytics/*.csv + outputs/analytics_report.md
+python scripts/run_analytics.py --list                  # list query names
+python scripts/run_analytics.py --query 01_total_revenue
+```
+
+Exit code 1 if any reconciliation check fails. Note: the first command **overwrites** the committed
+files in `outputs/`.
+
+### Tests
+
+```bash
+python -m pytest            # full suite
+python -m pytest -v         # one line per test
+```
+
+### Dashboard
+
+```bash
+streamlit run dashboard/app.py          # then open http://localhost:8501
+```
+
+Run the pipeline first. With no warehouse, the dashboard shows an empty state.
+
+### Synthetic data and benchmark
+
+```bash
+python scripts/generate_data.py --sample                      # regenerate data/sample (+ labels)
+python scripts/generate_data.py --rows 1000                   # → data/generated/1000/
+python scripts/generate_data.py --orders 100000 --products 2000 --seed 42
+python scripts/benchmark.py --sizes 1000 100000 --repeats 5   # overwrites outputs/benchmark_*; use --out DIR to keep them
+```
+
+Generator options: `--sample`, `--orders/--rows N` (default 600), `--products N` (60), `--seed N` (42),
+`--defect-rate F` (0.03), `--out DIR`, `--labels DIR`, `--with-increment`.
+
+On macOS/Linux, multi-line commands use `\` to continue a line. On Windows PowerShell, use a backtick
+`` ` `` or put the command on one line.
+
+### Configuration and isolated runs
+
+Every path can be overridden with an environment variable: `DATAFLOW_DB_PATH`, `DATAFLOW_RAW_DIR`,
+`DATAFLOW_PROCESSED_DIR`, `DATAFLOW_QUARANTINE_DIR`, `DATAFLOW_LOGS_DIR`, `DATAFLOW_ORDERS_PATH`,
+`DATAFLOW_PRODUCTS_PATH`. Further settings: `DATAFLOW_MAX_REJECT_RATIO`, `DATAFLOW_DB_CONNECT_TIMEOUT`, and
+`DATAFLOW_WRITE_PARQUET=0` to turn off the Parquet exports.
+
+```bash
+export DATAFLOW_DB_PATH=/tmp/df/wh.duckdb DATAFLOW_RAW_DIR=/tmp/df/raw DATAFLOW_PROCESSED_DIR=/tmp/df/processed \
+       DATAFLOW_QUARANTINE_DIR=/tmp/df/quarantine DATAFLOW_LOGS_DIR=/tmp/df/logs
+python -m src.pipeline
+```
+
+```powershell
+$env:DATAFLOW_DB_PATH = "$env:TEMP\df\wh.duckdb"; $env:DATAFLOW_LOGS_DIR = "$env:TEMP\df\logs"
+$env:DATAFLOW_RAW_DIR = "$env:TEMP\df\raw"; $env:DATAFLOW_PROCESSED_DIR = "$env:TEMP\df\processed"
+$env:DATAFLOW_QUARANTINE_DIR = "$env:TEMP\df\quarantine"
+python -m src.pipeline
+```
+
+### Troubleshooting
+
+| Symptom | Fix |
 |---|---|
-| 0 | Successful or skipped execution |
-| 1 | Pipeline failure |
-| 2 | Another pipeline execution holds the lock |
+| `ModuleNotFoundError: src` | Run from the repository root with `python -m src.pipeline`, not `python src/pipeline.py` |
+| `streamlit`/`pytest` not found | Activate the virtual environment |
+| Exit code 2 / `LOCKED` | Another run is in progress; wait for it to finish (locks left by dead processes clear themselves) |
+| Status `SKIPPED` | The files were already loaded; use `--force` to reprocess them |
+| Dashboard says the pipeline is writing | Refresh after the run commits |
+| Dashboard shows other data | Check `DATAFLOW_DB_PATH` |
 
-The pipeline prints a JSON execution summary and records run information in the warehouse.
+## 17. Sample outputs and expected results
 
----
+On a fresh warehouse, steps 1–3 of §16 give the following. These numbers were re-run and matched on
+2026-11-14.
 
-## 11. Launch the Streamlit Dashboard
+| Run | Status | Input rows | Valid | Rejected | Facts inserted / updated |
+|---|---|---:|---:|---:|---|
+| Batch 1 | SUCCESS | 667 | 642 | 25 | 582 / 0 |
+| Batch 2 | SUCCESS | 164 | 162 | 2 | 150 / 5 (status corrections) |
+| Batch 1 again | SKIPPED | n/a | n/a | n/a | n/a |
 
-After running the pipeline, launch the dashboard:
+Then `python scripts/run_analytics.py` gives (committed in [`outputs/analytics_report.md`](outputs/analytics_report.md)):
 
-```bash
-streamlit run dashboard/app.py
-```
-
-Open the following address in your browser:
-
-```text
-http://localhost:8501
-```
-
-The dashboard provides:
-
-**Pipeline Overview**
-- Pipeline execution counts.
-- Ingestion and rejection metrics.
-- Recent run information.
-- Processing trends.
-
-**Data Quality**
-- Rejected-record categories.
-- Validation failure reasons.
-- Searchable rejected-record information.
-- Source file and physical line traceability.
-
-**Business Analytics**
-- Revenue.
-- Orders.
-- Units sold.
-- Average order value.
-- Daily and monthly trends.
-- Product and customer rankings.
-
-**Pipeline Runs**
-- Run history.
-- Processing stages and timings.
-- File-level processing information.
-- Warnings and errors.
-- Run Pipeline action.
-
-All dashboard metrics are queried from the local DuckDB warehouse.
-
-### Dashboard Verification
-
-The dashboard was browser-tested on November 13, 2026, using Google Chrome and Playwright.
-
-Verification covered:
-
-- All four dashboard pages.
-- Charts and data tables.
-- Sidebar navigation.
-- Empty warehouse behavior.
-- Desktop viewport (1440 × 900).
-- Mobile viewport (390 × 844).
-- Pipeline execution through the dashboard.
-- Concurrent execution and locking behavior.
-
-The sample batch sequence produced:
-
-```text
-Batch 1      SUCCESS
-Batch 2      SUCCESS
-Batch 1      SKIPPED
-```
-
-Concurrent execution attempts were also tested. The pipeline lock prevented a second execution while another run was active.
-
----
-
-## 12. Testing and Validation
-
-Automated testing is performed using Pytest.
-
-Run the complete test suite:
-
-```bash
-python -m pytest
-```
-
-Run tests with detailed output:
-
-```bash
-python -m pytest -v
-```
-
-Run a specific test module:
-
-```bash
-python -m pytest tests/test_warehouse.py -k idempot
-```
-
-### Test Results
-
-**Latest recorded full test run:**
-
-- Date: November 13, 2026.
-- Environment: macOS arm64.
-- Python: 3.14.3.
-- Result: 102 passed.
-- Execution time: 13.73 seconds.
-
-Detailed output is available in:
-
-`outputs/test_results.txt`
-
-### Testing Coverage
-
-| Test Category | Verification |
-|---|---|
-| Normal ingestion | Valid records load successfully |
-| Empty inputs | Empty files and missing files are handled |
-| Schema validation | Missing and additional columns are detected |
-| Malformed records | Invalid records are quarantined |
-| Duplicate detection | Exact and conflicting duplicates are handled |
-| Null handling | Required and optional null values are validated |
-| Referential integrity | Invalid product references are rejected |
-| Business rules | Quantity, price, status, and timestamp rules are enforced |
-| Late-arriving data | Historical transactions are processed correctly |
-| SCD Type 2 | Product history is maintained |
-| Transaction recovery | Failed loads roll back and can be retried |
-| Idempotency | Repeated file processing avoids duplicate facts |
-| Data reconciliation | Input records are accounted for |
-| Raw-record traceability | Original source lines are preserved |
-| Concurrency | Simultaneous pipeline execution is prevented |
-| Dashboard | All four pages and empty states are tested |
-
-The suite also verifies deterministic keys, decimal precision, customer consistency, status corrections, replay behavior, and generated-dataset reconciliation.
-
-### Data Reconciliation
-
-DataFlow validates the relationship between physical input records, valid records, rejected records, and warehouse facts.
-
-The core invariant is:
-
-```text
-Input Rows = Valid Rows + Rejected Rows
-```
-
-Additional checks cover:
-
-- Quarantine counts.
-- Fact table uniqueness.
-- Referential integrity.
-- Revenue calculation.
-- Order-line accounting.
-- Rejection reason breakdown.
-- Consistency between source files and warehouse records.
-
----
-
-## 13. Sample Analytical Results
-
-Revenue is defined as the sum of order-line transaction values for orders with statuses:
-
-- `paid`
-- `shipped`
-- `delivered`
-
-Cancelled, returned, and pending orders are not included in recognized revenue.
-
-### Sample Warehouse Results
-
-The following results were recorded after loading both sample batches.
-
-| Metric | Result |
+| Metric | Value |
 |---|---:|
-| Recognized Revenue | 307,320.17 |
-| Revenue Orders | 201 |
-| Orders in All Statuses | 246 |
-| Order Lines | 732 |
-| Units Sold | 2,475 |
-| Average Order Value | 1,528.96 |
-| Rejected Records | 27 |
-| Source Rows | 831 |
-| Rejection Rate | 3.25% |
+| Recognised revenue | 307,320.17 |
+| Pending value / cancelled + returned value | 18,687.15 / 22,069.44 |
+| Revenue orders / all orders / order lines | 201 / 246 / 732 |
+| Units sold (revenue lines) | 2,475 |
+| Average order value | 1,528.96 |
+| Rejected records (current) | 27 of 831 = 3.25 % (orders 2.77 %, products 8.22 %) |
+| Top category | Electronics: 109,937.06 (35.77 %) |
+| Reconciliation | **ALL PASS** (9 checks) |
 
-All recorded reconciliation checks passed after rebuilding the sample warehouse.
+Example summary printed by the pipeline (abridged):
 
-### Available Analytical Queries
-
-Run all queries:
-
-```bash
-python scripts/run_analytics.py
+```json
+{
+  "run_id": "run_20261114T063151_fe5d4c",
+  "status": "SUCCESS",
+  "metrics": { "input_rows": 667, "valid_rows": 642, "rejected_rows": 25, "facts_inserted": 582 },
+  "warnings": [],
+  "error_message": null
+}
 ```
 
-List available queries:
+Committed output files: `outputs/analytics/analytics__*.csv` (10 queries),
+`outputs/analytics/reconciliation__*.csv` (4), `outputs/analytics/monitoring__*.csv` (runs, rejection
+reasons and categories, current quarantine).
 
-```bash
-python scripts/run_analytics.py --list
-```
+## 18. Reconciliation and data-quality checks
 
-Run a specific query:
-
-```bash
-python scripts/run_analytics.py --query 07_top_10_products
-```
-
-Results are exported to:
+The following must hold for every run and every source file (`sql/reconciliation/`):
 
 ```text
-outputs/analytics/
-outputs/analytics_report.md
+input_rows    = valid_rows + rejected_rows
+rejected_rows = quarantine rows = malformed + duplicates + missing + invalid_types + business_rule + invalid_references
+valid order rows = facts_inserted + facts_updated + facts_unchanged + facts_stale_skipped
+fact rows = distinct order lines = Σ facts_inserted;   Σ total_amount = Σ quantity × unit_price;   0 orphan keys
 ```
 
-### SQL Analytics
+**100,000-line generated dataset** (re-run 2026-11-14, seed 42):
 
-| Query | Business Question |
-|---|---|
-| 01_total_revenue | What is the recognized revenue? |
-| 02_total_orders | How many orders and order lines exist? |
-| 03_total_quantity | How many units were sold? |
-| 04_daily_revenue | What is the daily revenue trend? |
-| 05_monthly_revenue | What is the monthly revenue trend? |
-| 06_revenue_by_category | Which categories generate the most revenue? |
-| 07_top_10_products | Which products perform best? |
-| 08_top_10_customers | Which customers generate the most revenue? |
-| 09_average_order_value | What is the average order value? |
-| 10_rejected_record_pct | What percentage of records are rejected? |
-
-Additional reconciliation queries are available under `sql/reconciliation/`.
-
----
-
-## 14. Large Dataset Validation
-
-The pipeline was also tested using a generated dataset containing 100,000 requested order lines and 2,000 products.
-
-The generator intentionally adds duplicate and conflicting records.
-
-### Verified Dataset Accounting
-
-| Description | Rows |
-|---|---:|
-| Requested order lines | 100,000 |
-| Injected exact duplicate copies | 200 |
-| Injected conflicting copies | 200 |
-| Physical order rows | 100,400 |
-| Physical product rows | 2,080 |
-| Valid order rows | 96,630 |
-| Valid product rows | 2,000 |
-| Rejected order rows | 3,770 |
-| Rejected product rows | 80 |
-| Total physical source rows | 102,480 |
-| Total valid source rows | 98,630 |
-| Total rejected source rows | 3,850 |
-
-The reconciliation equation was satisfied:
-
-```text
-102,480 = 98,630 + 3,850
-```
-
-Every rejected record was accounted for by its validation category and source traceability.
-
-### Rejection Categories
-
-| Category | Orders | Products |
-|---|---:|---:|
-| Malformed records | 200 | 0 |
-| Duplicates | 600 | 16 |
-| Missing values | 400 | 16 |
-| Invalid types | 502 | 16 |
-| Business rule violations | 1,098 | 32 |
-| Invalid references | 970 | 0 |
-| **Total** | **3,770** | **80** |
-
----
-
-## 15. Idempotency and Recovery
-
-DataFlow implements multiple mechanisms to protect the warehouse against duplicate processing and incomplete transactions.
-
-### File Fingerprinting
-
-Each input file receives a SHA-256 fingerprint.
-
-Successfully processed files are recognized even if they are supplied again under a different filename.
-
-### Fact Upserts
-
-Fact records are matched using `order_line_id`.
-
-- New records are inserted.
-- Identical records remain unchanged.
-- Updated records are updated in place.
-
-### Historical Data Protection
-
-Older files cannot overwrite newer corrections simply because they are replayed later.
-
-### Atomic Transactions
-
-Warehouse changes are committed only after the transaction completes successfully and integrity checks pass.
-
-### Failure Recovery
-
-If an execution is interrupted, its incomplete run is marked failed during subsequent processing. Failed files remain eligible for retry.
-
-### Recorded Idempotency Verification
-
-A fresh warehouse was tested using the same input files three times.
-
-| Table | After Run 1 | After Run 2 | After Forced Run |
+| | Orders | Products | Total |
 |---|---:|---:|---:|
-| fact_sales | 967 | 967 | 967 |
-| dim_product | 60 | 60 | 60 |
-| dim_customer | 114 | 114 | 114 |
-| dim_date | 181 | 181 | 181 |
-| pipeline_runs | 1 | 2 | 3 |
-| processed_files | 2 | 2 | 2 |
-| quarantine | 42 | 42 | 84 |
+| Physical source rows | 100,400 | 2,080 | **102,480** |
+| Valid | 96,630 | 2,000 | **98,630** |
+| Rejected | 3,770 | 80 | **3,850** |
+| of which malformed / duplicates / missing / invalid types / business rule / invalid refs | 200 / 600 / 400 / 502 / 1,098 / 970 | 0 / 16 / 16 / 16 / 32 / 0 | |
 
-The forced run reported:
+`102,480 = 98,630 + 3,850`. 96,630 fact rows = 96,630 distinct order lines. Revenue check
+43,968,852.14 = 43,968,852.14. Orphan keys: 0.
 
-```text
-Inserted: 0
-Updated: 0
-Unchanged: 967
-```
+The 400 extra order rows are the generator's 200 exact copies and 200 conflicting copies. The 600
+duplicate rejections are the 200 extra exact copies plus both copies of each of the 200 conflicting pairs.
 
-Quarantine is append-only per run. The dashboard uses the latest processing state when reporting current rejection metrics.
+**Idempotency** (1,000 lines, three runs on one warehouse, re-run 2026-11-14): `fact_sales` 967 → 967 →
+967, `dim_product` 60, `dim_customer` 114, `dim_date` 181 unchanged. `pipeline_runs` 1 → 2 → 3. The forced
+run inserted 0, updated 0 and left 967 unchanged.
 
----
+Full details: [`docs/testing_and_validation.md`](docs/testing_and_validation.md).
 
-## 16. Performance Benchmarking
+## 19. Performance benchmark and optimisation
 
-The project includes a benchmarking utility to measure pipeline performance at different data volumes.
+`python scripts/benchmark.py --sizes 1000 100000 --repeats 5`, recorded 2026-11-12 on an Apple M1 (8
+CPUs), Python 3.14.3, DuckDB 2.0.0, pandas 3.1.1. Each figure is the median of 5 runs on a fresh warehouse.
 
-Run:
-
-```bash
-python scripts/benchmark.py --sizes 1000 100000 --repeats 5
-```
-
-The benchmark:
-
-1. Generates synthetic input data.
-2. Creates a fresh warehouse.
-3. Executes the pipeline.
-4. Measures processing stages.
-5. Repeats the experiment.
-6. Reports median execution times.
-7. Measures forced rerun performance.
-
-### Recorded Benchmark Results
-
-**Environment**
-
-- Apple M1, 8 CPUs.
-- macOS 26.6.2.
-- Python 3.14.3.
-- DuckDB 2.0.0.
-- Pandas 3.1.1.
-- Five repetitions per dataset size.
-
-| Metric | 1,000 Requested Lines | 100,000 Requested Lines |
+| Metric | 1,000 lines | 100,000 lines |
 |---|---:|---:|
-| Physical Input Rows | 1,212 | 102,480 |
-| Data Generation | 0.033 s | 0.833 s |
-| Ingestion | 0.011 s | 0.458 s |
-| Validation | 0.022 s | 0.629 s |
-| Transformation | 0.015 s | 0.459 s |
-| Loading | 0.044 s | 0.367 s |
-| Total Pipeline Time | 0.118 s | 2.056 s |
+| Input rows | 1,212 | 102,480 |
+| Ingestion / validation / transformation / load | 0.011 / 0.022 / 0.015 / 0.044 s | 0.458 / 0.629 / 0.459 / 0.367 s |
+| **Total run** | **0.118 s** | **2.056 s** |
 | Throughput | 10,271 rows/s | 49,844 rows/s |
-| Forced Rerun | 0.113 s | 2.303 s |
+| Forced rerun | 0.113 s | 2.303 s |
 
-These are recorded measurements from one laptop, not universal performance guarantees.
+**Measured optimisation:** loading 20,000 rows with row-by-row `executemany` took 3.965 s. Registering
+the DataFrame with DuckDB and running one `INSERT … SELECT` took 0.0045 s, about 886× faster (single
+measurement). Every table load uses the set-based method. The main remaining cost is Python-side
+validation and key hashing.
 
-The complete methodology, environment details, and limitations are documented in:
+These are measurements from one laptop, not guarantees. Method, spread and limitations are in
+[`docs/performance.md`](docs/performance.md) and [`outputs/benchmark_report.md`](outputs/benchmark_report.md).
 
-- `outputs/benchmark_report.md`
-- `outputs/benchmark_results.json`
+## 20. Testing approach and results
 
----
+Each test builds its own temporary warehouse and data folders (`tests/conftest.py`), runs the **real
+pipeline** end to end and then checks the database. No test reads or writes the project's own data.
 
-## 17. Engineering Decisions and Trade-offs
+| Module | Cases | Focus |
+|---|---:|---|
+| `test_ingestion.py` | 16 | Empty/missing files, schema drift, header normalisation, malformed rows |
+| `test_validation.py` | 41 | Every reason code, null tokens, boundaries, duplicates, references |
+| `test_warehouse.py` | 24 | SCD2, late data, rollback + retry, crash recovery, idempotency, corrections, locking |
+| `test_traceability.py` | 8 | Exact source text, row accounting, blank lines, schema upgrade |
+| `test_generator_and_analytics.py` | 8 | Generator determinism, labels match, analytics, full reconciliation |
+| `test_dashboard.py` | 5 | All four pages + empty state (Streamlit `AppTest`) |
 
-The following decisions were made to prioritize data correctness, reproducibility, traceability, and local execution.
+**Actual results**
 
-| Decision | Reason | Trade-off |
+| Date | Environment | Result |
 |---|---|---|
-| DuckDB instead of a server database | Lightweight local analytical warehouse | Single-node and single-writer architecture |
-| Python and SQL | Flexible validation with transparent analytical queries | Some transformations execute in Python |
-| Parquet storage | Efficient columnar storage | Additional file management |
-| SCD Type 2 for products | Preserves historical catalog changes | More complex dimension loading |
-| SHA-256 file fingerprinting | Detects previously processed files | Requires file hashing |
-| Transactional warehouse loading | Prevents partial commits | A failed batch must be retried |
-| Append-only quarantine | Maintains rejection history | Forced reruns can create additional quarantine rows |
-| Whole-order rejection | Prevents inconsistent customer-level reporting | Clean sibling lines can also be rejected |
+| 2026-11-14 | macOS arm64, Python 3.14.3, pytest 9.2.0 | **102 passed in 18.26 s** |
+| 2026-11-13 | same | 102 passed in 13.73 s, full output in [`outputs/test_results.txt`](outputs/test_results.txt) |
 
-### Important Business Rule: Inconsistent Customers
+The dashboard was also checked in Chrome with Playwright on 2026-11-13 (page rendering, charts,
+navigation, run button and lock behaviour), which produced the screenshots in `docs/screenshots/`. On
+2026-11-14 it was started headless and answered HTTP 200.
 
-An order must belong to exactly one customer.
+## 21. Design decisions and trade-offs
 
-If the same order is associated with multiple customers, every line belonging to that order in the current batch is quarantined.
+| Decision | Why | Trade-off |
+|---|---|---|
+| DuckDB file instead of a server database | Real SQL warehouse with nothing to install; reproducible | Single machine, single writer |
+| Read all values as text, type them in validation | A bad value becomes a traceable rejection, not a crash or a silent NaN | Slightly more memory |
+| Reject **all** copies of a conflicting `order_line_id` | No basis for choosing one; a guess would corrupt revenue | Valid data may wait in quarantine |
+| Reject the **whole order** if it names more than one customer | Revenue and AOV would otherwise depend on a guess about the customer | 567 clean sibling lines held back in the 100k test (D14) |
+| SCD2 products with `ASOF JOIN` | Category and price as they were at the time of sale | More complex load; facts re-pointed when history changes |
+| Deterministic MD5 surrogate keys | Same keys in every rebuild and DuckDB version | 60-bit key space (collision risk negligible; the primary key would catch one) |
+| One transaction per batch + integrity checks | No partial loads | A whole batch must be retried after a failure |
+| Integrity enforced by checks, not declared foreign keys | DuckDB foreign keys get in the way of in-place upserts | Checks must be maintained in code |
+| Append-only quarantine per run | Each run's numbers reconcile on their own | Forced reruns add rows; views remove them from current counts |
+| Reject-ratio threshold of 50 % | A mostly-bad file is a broken export | Threshold is a judgement call (configurable) |
 
-This prevents partially loading an inconsistent order and producing incorrect customer rankings, order counts, and average order values.
+All 15 decisions are explained in [`docs/design_decisions.md`](docs/design_decisions.md).
 
-The decision is documented in `docs/design_decisions.md`.
+## 22. Assumptions and limitations
 
----
+**Assumptions**
 
-## 18. Known Limitations
+- Order files arrive in business order. Orders have no version or `updated_at` field, so file arrival
+  order (`source_seq`) decides which correction wins.
+- A timestamp without a zone is treated as UTC. `date_key` is the UTC calendar date.
+- A return removes the whole line value from revenue. Partial refunds are not in the source.
+- `order_id` identifies one customer's purchase.
+- The sample data covers Jan–Aug 2026. The future-timestamp rule allows 24 h after the run time.
 
-The current implementation has the following limitations:
+**Limitations**
 
-1. **Single-node architecture:** DuckDB operates as a local, single-writer analytical database.
-2. **Correction ordering:** Order data does not contain a version or update timestamp, so correction ordering relies on file arrival order.
-3. **Returns:** Returned order lines are excluded from recognized revenue; partial refunds are not modeled.
-4. **Future timestamps:** Future timestamp validation uses the processing time with a 24-hour tolerance.
-5. **Raw storage:** Raw files are copied per run, including forced reruns.
-6. **Processing performance:** Validation and key hashing are performed in pandas/Python and become more expensive as data volume grows.
-7. **Whole-order rejection:** An order containing multiple customer identifiers is rejected as a whole.
-8. **Legacy quarantine records:** Older warehouse records may not contain original source-line text.
-9. **Referential integrity:** Integrity is enforced through checks within the load transaction rather than declared foreign-key constraints.
-10. **Customer dimension:** The current customer dimension is Type 1 and contains limited descriptive information.
+- Single machine and single writer (DuckDB). No orchestrator, scheduler or alerting.
+- Validation and surrogate-key hashing run in pandas/Python, which is the main cost at higher volumes.
+- Raw files are copied once per run, including forced reruns.
+- `dim_customer` has only an id and `first_order_date`, because the source has no customer attributes.
+- Quarantined rows cannot be released from the UI. They must be corrected at source and redelivered.
+- Quarantine rows written before the `source_line` column existed have it as `NULL`.
+- Verified on macOS only. Windows instructions are provided but untested. There is no CI.
+- Benchmarks come from a single laptop. Datasets larger than 100k lines were not benchmarked.
 
-The benchmark was conducted on one Apple M1 machine. Performance may vary depending on hardware, workload, and system utilization.
+## 23. Future improvements
 
-The Windows setup instructions are provided, but the recorded verification environment is macOS.
+None of the following is implemented:
 
----
+- Move validation rules and key hashing into DuckDB SQL.
+- Run on a schedule with Airflow or Dagster (the run, ledger and lock design maps directly onto tasks).
+- Alert on failed runs and on unusual rejection rates.
+- Keep source contracts in versioned YAML.
+- Add a quarantine review and release workflow.
+- Add a customer master source and SCD2 customers.
+- Store raw files once per content hash and partition the Parquet exports.
+- Add CI (GitHub Actions) on Linux and Windows.
 
-## 19. Troubleshooting
+## 24. AI usage disclosure
 
-| Problem | Recommended Solution |
+AI tools were used during development. The prompts are in [`prompt_history/`](prompt_history/). This
+section describes **only what the available records show**.
+
+**Tools identified from records on the development machine**
+
+| Tool | Model | When | Evidence |
+|---|---|---|---|
+| Claude Code (VS Code extension) | Claude Opus 5.5 (`claude-opus-5-5`) | 2026-11-12 → 2026-11-13 | Session transcript; 6 prompts recovered verbatim |
+| Claude Code (VS Code extension) | Claude Opus 5.5 | 2026-11-14 | This documentation and submission audit; 1 prompt |
+| *Tool(s) used for the initial design and implementation* | *unknown* | before 2026-11-12 17:49 UTC | **Not recorded on this machine. To be declared by the candidate** |
+
+**Where AI helped, based on the transcript**
+
+- **Substantial implementation help during verification (Claude Code, Nov 12–13).** The assistant ran
+  the test suite, pipeline, reconciliation and benchmarks, and wrote or changed code and documents.
+  This included `--rows` in the generator, reconciliation SQL, `source_line` traceability, the
+  `check_accounting()` safeguard (replacing a silent `drop_duplicates`), new tests (89 → 102), dashboard
+  fixes, the benchmark report, design decisions D14–D15 and README updates. It also ran the Playwright
+  browser check that produced the screenshots.
+- **Documentation (Claude Code, Nov 14).** This README, `docs/testing_and_validation.md`,
+  `docs/performance.md` and `prompt_history/` were written by the assistant after it read the code and
+  repeated the runs. No application code was changed.
+- **Setup help.** How to run the commands and how to push to GitHub.
+
+**What the candidate did, based on the records**
+
+- Wrote all the recovered prompts, including detailed requirements that told the assistant to verify
+  rather than claim results, to avoid damaging data, and to keep the whole-order rule documented
+  rather than changed.
+- Installed the environment, ran the generator, found and reported that the documented `--rows`
+  command did not work (P1), and reviewed the verification report (89 tests) before asking for the
+  next round (P3).
+- Authored and pushed every git commit.
+
+> **To be completed by the candidate before submission:** state which tool(s) produced the initial
+> implementation and add those prompts to `prompt_history/prompts.md`; say whether the README rewrite in
+> commit `fd2ce8d` was written by hand or with AI; and describe in your own words what you personally
+> designed, reviewed, changed and tested. This disclosure must not be submitted as complete until those
+> points are filled in.
+
+**How the final implementation was verified.** 102 automated tests (all passing on 2026-11-14). The
+sample, 100k and idempotency results were re-run on 2026-11-14 in an isolated directory and matched the
+documented numbers exactly. Every reconciliation query returned PASS. The dashboard was checked with
+`AppTest`, an HTTP smoke test and the earlier Playwright run.
+
+## 25. Supporting documentation
+
+| Document | Contents |
 |---|---|
-| Python version is unsupported | Install Python 3.11 or newer and recreate the virtual environment |
-| Dependency installation fails | Upgrade pip and reinstall using `requirements.txt` |
-| `streamlit` command not found | Activate the virtual environment |
-| `pytest` command not found | Activate the virtual environment and install dependencies |
-| Pipeline exits with code 2 | Another execution holds the pipeline lock; wait for it to finish |
-| Pipeline status is SKIPPED | The file was already processed; use `--force` if reprocessing is required |
-| Pipeline fails due to schema validation | Correct the source file and retry |
-| Dashboard shows an empty warehouse | Execute the pipeline before opening the dashboard |
-| Dashboard says pipeline is writing | Wait for the active warehouse transaction to finish and refresh |
-| Dashboard displays another database | Check `DATAFLOW_DB_PATH` |
-| Streamlit reports an unsupported width option | Reinstall dependencies using `requirements.txt` |
-
-### Environment Variables
-
-The following environment variables can be used to configure storage locations:
-
-```text
-DATAFLOW_DB_PATH
-DATAFLOW_ORDERS_PATH
-DATAFLOW_PRODUCTS_PATH
-DATAFLOW_RAW_DIR
-DATAFLOW_PROCESSED_DIR
-DATAFLOW_QUARANTINE_DIR
-DATAFLOW_LOGS_DIR
-```
-
-For isolated testing, point the database and storage directories to temporary locations rather than modifying existing project data.
+| [`docs/architecture.md`](docs/architecture.md) | Data flow, star schema, run lifecycle, concurrency model, module map |
+| [`docs/data_dictionary.md`](docs/data_dictionary.md) | Source contracts, every warehouse and operational column, reason codes |
+| [`docs/design_decisions.md`](docs/design_decisions.md) | 15 decisions with reasons and costs (D1–D15) |
+| [`docs/testing_and_validation.md`](docs/testing_and_validation.md) | Test inventory, actual results, reconciliation and idempotency evidence |
+| [`docs/performance.md`](docs/performance.md) | Benchmark method, results, optimisation, bottlenecks |
+| [`prompt_history/`](prompt_history/) | AI prompts (recovered verbatim) and known gaps |
+| [`outputs/`](outputs/) | Analytics report and CSVs, reconciliation CSVs, benchmark report and JSON, test output |
+| [`docs/screenshots/`](docs/screenshots/) | Dashboard screenshots |
 
 ---
 
-## 20. AI Assistance and Prompt History
-
-AI tools were used as development assistance during the project.
-
-Their role, the prompts used, and the developer's own validation work must be documented transparently.
-
-### AI Usage Disclosure
-
-AI assistance may be used to accelerate:
-
-- Technical research and implementation planning.
-- Code review and debugging.
-- Test-case identification.
-- SQL and data engineering problem-solving.
-- Documentation improvements.
-- Architecture discussions and edge-case analysis.
-
-### Personal Review and Validation
-
-The developer's responsibility includes understanding and reviewing the implementation.
-
-The project was validated through:
-
-- Reviewing the pipeline architecture and execution flow.
-- Running the automated test suite.
-- Verifying the 102 recorded passing tests.
-- Checking ingestion and rejection accounting.
-- Verifying warehouse loading and idempotency.
-- Testing failure recovery and concurrency controls.
-- Executing analytical and reconciliation queries.
-- Browser-testing the four dashboard pages.
-- Running performance benchmarks.
-
-AI-generated suggestions should not be treated as verified results without independent testing.
-
-### Prompt History
-
-The complete prompts submitted to the AI tools used during development must be included in:
-
-`docs/ai_prompt_history.md`
-
-The prompt history should include all prompts submitted to each AI tool, with the tool name and relevant date or sequence where available. AI responses are optional under the submission guidelines.
-
-If a tool does not provide an exportable history, maintain a reasonable manual record and disclose that limitation.
-
-**Important:** Ensure the prompt-history document contains the actual prompts used during development. Do not substitute reconstructed or invented prompts for the original history.
-
----
-
-## 21. Security and Data Privacy
-
-- No API keys or external service credentials are required.
-- No cloud services are required.
-- The application uses local files and a local DuckDB database.
-- Sensitive configuration files should not be committed.
-- `.gitignore` excludes `.env` and Streamlit secrets.
-- Synthetic sample data is used for demonstration and testing.
-
-Never commit passwords, access tokens, private credentials, or sensitive personal information to the public repository.
-
----
-
-## 22. Future Improvements
-
-Potential improvements include:
-
-- Moving computationally expensive validation and key hashing operations into DuckDB.
-- Supporting partitioned Parquet storage for larger datasets.
-- Adding Airflow or Dagster orchestration.
-- Introducing automated alerts for pipeline failures and unusual rejection rates.
-- Implementing versioned YAML-based data contracts.
-- Adding a quarantine review and record-release interface.
-- Introducing a customer master source and SCD Type 2 customer dimension.
-- Expanding monitoring and operational reporting.
-
-These are proposed enhancements and are not claimed as completed functionality.
-
----
-
-## 23. Supporting Documentation and Evidence
-
-The repository includes supporting material to help reviewers understand the implementation and verify its behavior.
-
-| Artifact | Purpose |
-|---|---|
-| `docs/architecture.md` | Detailed architecture and execution lifecycle |
-| `docs/data_dictionary.md` | Source, warehouse, and operational schemas |
-| `docs/design_decisions.md` | Technical decisions and trade-offs |
-| `docs/ai_prompt_history.md` | Complete AI prompt history |
-| `docs/screenshots/` | Dashboard screenshots |
-| `outputs/test_results.txt` | Recorded automated test results |
-| `outputs/benchmark_report.md` | Benchmark methodology and results |
-| `outputs/benchmark_results.json` | Raw benchmark results |
-| `outputs/analytics_report.md` | Business analytics results |
-| `tests/` | Automated test suite |
-| `sql/` | Warehouse, analytics, reconciliation, and monitoring queries |
-
----
-
-## 24. Challenge Submission Information
-
-**Challenge:** YottaFlex AI — 72-Hour Candidate Project Challenge
-
-**Project:** DataFlow — End-to-End E-Commerce Data Engineering Pipeline
-
-**Repository:** YottaFlex-72hrs-challenge
-
-**Implementation:** Python, SQL, DuckDB, Parquet, Streamlit
-
-**Execution:** Local and reproducible
-
-**Testing:** 102 recorded passing automated tests
-
-**Dashboard:** Four-page interactive Streamlit application
-
-**AI Disclosure:** Prompt history and developer review documentation
-
-### Submission Readiness Checklist
-
-Before submitting, verify the following:
-
-- [ ] GitHub repository is public.
-- [ ] Complete source code is committed.
-- [ ] README contains accurate setup and execution instructions.
-- [ ] Dependencies are listed in `requirements.txt`.
-- [ ] Sample datasets are available.
-- [ ] Automated tests can be executed.
-- [ ] Test evidence is included.
-- [ ] Architecture documentation is included.
-- [ ] Data dictionary is included.
-- [ ] Engineering decisions and trade-offs are documented.
-- [ ] Complete AI prompt history is included.
-- [ ] AI usage and personal validation are disclosed.
-- [ ] Dashboard screenshots and supporting evidence are included.
-- [ ] No credentials, API keys, or sensitive information are committed.
-- [ ] Git history contains meaningful development commits.
-
----
-
-## 25. Conclusion
-
-DataFlow demonstrates an end-to-end approach to building a reliable data engineering pipeline using locally executable technologies.
-
-The implementation focuses on more than simply loading CSV files into a database. It addresses the engineering challenges involved in handling imperfect data, preserving historical information, preventing duplicate processing, recovering from failures, maintaining record-level traceability, and producing trustworthy analytical results.
-
-Through dimensional modeling, transactional loading, SQL analytics, automated testing, performance benchmarking, and operational monitoring, the project demonstrates a structured approach to building reproducible data systems.
-
-**The objective is simple: transform unreliable source data into accurate, traceable, and actionable business information.**
-
----
-
-**YottaFlex 72-Hour Challenge | DataFlow | 2026**
+*No credentials, API keys or personal data are needed or stored. All data is synthetic, made by
+`src/datagen.py`. `.env` and `.streamlit/secrets.toml` are git-ignored as a precaution.*
